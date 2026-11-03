@@ -1,0 +1,4 @@
+// ใส่ Web App URL ของ Google Apps Script ที่นี่ (ได้จากขั้นตอน Deploy — ดู README.md)
+window.APP_CONFIG = {
+  API_URL: ''   // เช่น 'https://script.google.com/macros/s/AKfycbxDdG1KulcXSetp2mAgxfGMxG4y2W6VAAs8y16ttmV3-j3hFpBlQZFev993TGV3S06BWA/exec'
+};
