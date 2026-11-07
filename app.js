@@ -22,6 +22,9 @@ function h(tag, props, ...kids) {
   return e;
 }
 
+// ใส่ลูกหลานแทนของเดิม โดยข้ามค่า null/false (กันคำว่า "null" โผล่บนหน้าจอ)
+function setKids(el, ...kids) { el.replaceChildren(...kids.flat(Infinity).filter(k => k != null && k !== false)); }
+
 /* ---------- ไอคอน + ธีม ---------- */
 const ICONS = {
   sun: '<circle class="f" cx="12" cy="12" r="4.5"/><path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M4.9 19.1l1.8-1.8M17.3 6.7l1.8-1.8"/>',
@@ -29,7 +32,8 @@ const ICONS = {
   gear: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>',
   back: '<path d="M19 12H5M12 19l-7-7 7-7"/>',
   check: '<path d="M20 6 9 17l-5-5"/>',
-  plus: '<path d="M12 5v14M5 12h14"/>'
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  ticket: '<path d="M4 6h16v4a2 2 0 0 0 0 4v4H4v-4a2 2 0 0 0 0-4z"/><path d="M14 6v2M14 11v2M14 16v2"/>'
 };
 function icon(n) {
   const s = document.createElement('span');
@@ -52,7 +56,7 @@ function toggleTheme() {
 applyTheme(getTheme());
 
 /* ---------- สถานะ ---------- */
-const state = { trips: [], people: [], tripId: null, tab: 'add', filter: 'all', q: '', shown: false, lastSync: 0 };
+const state = { trips: [], people: [], tripId: null, tab: 'add', filter: 'all', tfilter: 'all', q: '', shown: false, lastSync: 0 };
 const ui = {};
 let pending = 0;          // จำนวนคำขอบันทึกที่ยังค้างอยู่ (ระหว่างนี้ไม่ซิงก์ทับ)
 let pollTimer = null;
@@ -127,7 +131,9 @@ async function refresh() {
 }
 function updateUI() {
   if (state.tripId) {
-    if (!currentTrip()) { goHome(); return; }
+    const ct = currentTrip();
+    if (!ct) { goHome(); return; }
+    if (ui.updateMeter && (ct.ticketMode || 'none') !== ui.mode) { renderTrip(); return; }   // เปลี่ยนโหมดตั๋ว: วาดหน้าใหม่
     ui.updateMeter && ui.updateMeter();
     ui.updateList && ui.updateList();
   } else ui.updateHome && ui.updateHome();
@@ -189,10 +195,12 @@ async function startApp() {
 }
 window.addEventListener('hashchange', () => { if (state.shown) route(); });
 const currentTrip = () => state.trips.find(t => t.id === state.tripId);
+const needTicket = t => !!t && t.ticketMode === 'required';
+const ticketCount = (tripId) => state.people.filter(p => p.tripId === tripId && p.ticket).length;
 function route() {
   const m = /^#trip-([A-Za-z0-9]+)$/.exec(location.hash);
   if (m && state.trips.some(t => t.id === m[1])) {
-    if (state.tripId !== m[1] || !ui.updateMeter) { state.tripId = m[1]; state.tab = 'add'; state.filter = 'all'; state.q = ''; renderTrip(); }
+    if (state.tripId !== m[1] || !ui.updateMeter) { state.tripId = m[1]; state.tab = 'add'; state.filter = 'all'; state.tfilter = 'all'; state.q = ''; renderTrip(); }
   } else { state.tripId = null; renderHome(); }
 }
 function goHome() { if (location.hash === '#home') route(); else location.hash = '#home'; }
@@ -252,10 +260,12 @@ function renderHome() {
       return h('button', { class: 'card trip', onclick: () => goTrip(t.id) },
         h('h3', null, t.name), h('span', { class: 'badge ' + s.k }, s.label),
         h('p', null, fmtDT(t.datetime)), t.place ? h('p', null, 'จุดนัดพบ: ' + t.place) : null,
+        h('p', { style: 'margin-top:6px' }, h('span', { class: 'tag' + (needTicket(t) ? ' req' : '') }, icon('ticket'), needTicket(t) ? 'ต้องมีตั๋ว' : 'เข้าฟรี ไม่ใช้ตั๋ว'),
+          needTicket(t) ? h('span', { style: 'margin-left:8px' }, 'ได้ตั๋วแล้ว ' + ticketCount(t.id) + ' / ' + s.n + ' คน') : null),
         h('div', { class: 'num' }, s.n + ' / ' + t.capacity, h('span', null, ' คน')),
         h('div', { class: 'bar' + (s.n >= t.capacity ? ' full' : '') }, h('div', { style: 'width:' + pct + '%' })));
     };
-    list.replaceChildren(
+    setKids(list,
       !ts.length ? h('div', { class: 'empty' }, h('b', null, 'ยังไม่มีรอบ'), 'กด "เพิ่มรอบใหม่" เพื่อสร้างรอบแรก') : null,
       ...upcoming.map(card),
       past.length ? h('h3', { style: 'margin:22px 0 10px;color:var(--mute);font-size:17px' }, 'รอบที่ผ่านไปแล้ว') : null,
@@ -271,14 +281,26 @@ function tripForm(t) {
     dt: h('input', { type: 'datetime-local', value: t ? t.datetime : '' }),
     place: h('input', { value: t ? t.place || '' : '', placeholder: 'เช่น หน้าสนามกีฬากลางจังหวัดยะลา' }),
     cap: h('input', { type: 'number', inputmode: 'numeric', min: '1', value: t ? t.capacity : '40' }),
-    note: h('textarea', { placeholder: 'เช่น ค่ารถ เวลาออกเดินทาง ของที่ต้องเตรียม' })
+    note: h('textarea', { placeholder: 'เช่น ค่ารถ เวลาออกเดินทาง ของที่ต้องเตรียม' }),
+    tinfo: h('input', { value: t ? t.ticketInfo || '' : '', placeholder: 'เช่น ใบละ 100 บาท เปิดขาย 10 พ.ย.' })
   };
   f.note.value = t ? t.details || '' : '';
+  let tmode = t ? (t.ticketMode || 'none') : 'none';
+  const tinfoWrap = h('div', null, h('label', null, 'รายละเอียดตั๋ว ', h('small', null, '(ไม่บังคับ)')), f.tinfo);
+  const modeSeg = h('div', { class: 'seg' });
+  const paintMode = () => {
+    modeSeg.replaceChildren(...[['none', 'ไม่ใช้ตั๋ว (เข้าฟรี)'], ['required', 'ต้องมีตั๋ว']].map(([k, l]) =>
+      h('button', { type: 'button', 'aria-pressed': tmode === k, onclick: () => { tmode = k; paintMode(); } }, l)));
+    tinfoWrap.hidden = tmode !== 'required';
+  };
+  paintMode();
   const err = h('div', { class: 'err', role: 'alert' });
   const body = h('div', null,
     h('label', null, 'ชื่อรอบ'), f.name, h('label', null, 'วันที่และเวลาเดินทาง'), f.dt,
     h('label', null, 'สถานที่ / จุดนัดพบ ', h('small', null, '(ไม่บังคับ)')), f.place,
-    h('label', null, 'จำนวนที่นั่งสูงสุด'), f.cap, h('label', null, 'รายละเอียดเพิ่มเติม ', h('small', null, '(ไม่บังคับ)')), f.note, err);
+    h('label', null, 'จำนวนที่นั่งสูงสุด'), f.cap,
+    h('label', null, 'ตั๋วเข้าชม'), modeSeg, tinfoWrap,
+    h('label', null, 'รายละเอียดเพิ่มเติม ', h('small', null, '(ไม่บังคับ)')), f.note, err);
   modal(t ? 'แก้ไขรอบ' : 'เพิ่มรอบใหม่', body, close => [
     h('button', { class: 'btn ghost', onclick: close }, 'ยกเลิก'),
     h('button', {
@@ -289,7 +311,7 @@ function tripForm(t) {
         if (!(cap >= 1)) { err.textContent = 'จำนวนที่นั่งต้องเป็นตัวเลขตั้งแต่ 1 ขึ้นไป'; f.cap.focus(); return; }
         btn.disabled = true; btn.textContent = 'กำลังบันทึก…';
         try {
-          const j = await mutate(() => api('tripSave', { trip: Object.assign(t ? { id: t.id } : {}, { name, datetime: f.dt.value, place: f.place.value.trim(), details: f.note.value.trim(), capacity: cap }) }));
+          const j = await mutate(() => api('tripSave', { trip: Object.assign(t ? { id: t.id } : {}, { name, datetime: f.dt.value, place: f.place.value.trim(), details: f.note.value.trim(), capacity: cap, ticketMode: tmode, ticketInfo: tmode === 'required' ? f.tinfo.value.trim() : '' }) }));
           upsert(state.trips, j.trip); close(); updateUI(); toast(t ? 'บันทึกการแก้ไขแล้ว' : 'เพิ่มรอบแล้ว');
         } catch (x) { err.textContent = thaiErr(x); btn.disabled = false; btn.textContent = t ? 'บันทึกการแก้ไข' : 'เพิ่มรอบ'; }
       }
@@ -299,6 +321,8 @@ function tripForm(t) {
 /* ---------- หน้ารอบ: เพิ่มรายชื่อ + รายชื่อ/เช็คอิน ---------- */
 function renderTrip() {
   const t0 = currentTrip();
+  ui.mode = t0.ticketMode || 'none';
+  const tinfoBox = h('div', { style: 'margin-top:8px' });
   const meterBox = h('div', { class: 'meter' });
   const tabs = h('div', { class: 'tabs', role: 'tablist' });
   const addPane = h('div'), listPane = h('div');
@@ -307,11 +331,14 @@ function renderTrip() {
   ui.updateMeter = () => {
     const t = currentTrip(); if (!t) return;
     const n = state.people.filter(p => p.tripId === t.id).length, left = t.capacity - n, pct = Math.min(100, Math.round(n / t.capacity * 100));
-    meterBox.replaceChildren(
+    setKids(meterBox,
       h('div', { class: 'row' }, h('span', { class: 'big' }, n, h('i', null, ' / ' + t.capacity)),
         h('span', { class: 'txt' }, 'บันทึกแล้ว ', h('b', null, n), ' / ทั้งหมด ', h('b', null, t.capacity), ' คน ',
           left > 0 ? ['เหลืออีก ', h('b', null, left), ' ที่นั่ง'] : (left === 0 ? h('b', null, 'เต็มแล้ว') : h('b', { style: 'color:var(--warn)' }, 'เกินมา ' + (-left) + ' คน')))),
-      h('div', { class: 'bar' + (n >= t.capacity ? ' full' : ''), role: 'progressbar', 'aria-valuenow': n, 'aria-valuemax': t.capacity }, h('div', { style: 'width:' + pct + '%' })));
+      h('div', { class: 'bar' + (n >= t.capacity ? ' full' : ''), role: 'progressbar', 'aria-valuenow': n, 'aria-valuemax': t.capacity }, h('div', { style: 'width:' + pct + '%' })),
+      needTicket(t) ? h('div', { class: 'tmeter' }, icon('ticket'), h('span', null, 'ได้ตั๋วแล้ว ', h('b', null, ticketCount(t.id)), ' / ' + n + ' คน · ยังขาด ', h('b', null, n - ticketCount(t.id)))) : null);
+    setKids(tinfoBox, h('span', { class: 'tag' + (needTicket(t) ? ' req' : '') }, icon('ticket'), needTicket(t) ? 'ต้องมีตั๋ว' : 'เข้าฟรี ไม่ใช้ตั๋ว'),
+      needTicket(t) && t.ticketInfo ? h('span', { class: 'hint', style: 'margin-left:8px' }, t.ticketInfo) : null);
   };
   const setTab = k => {
     state.tab = k; addPane.hidden = k !== 'add'; listPane.hidden = k !== 'list';
@@ -326,7 +353,8 @@ function renderTrip() {
   $app.replaceChildren(h('div', { class: 'wrap' }, topBar(t0.name, goHome), meterBox,
     h('div', { style: 'margin:12px 0 0;color:var(--mute);font-size:15px' }, fmtDT(t0.datetime), t0.place ? ' · ' + t0.place : '', ' ',
       h('button', { style: 'color:var(--white);text-decoration:underline;min-height:36px', onclick: () => tripForm(currentTrip()) }, 'แก้ไขรอบ')),
-    t0.details ? h('p', { class: 'hint', style: 'margin-top:4px;white-space:pre-wrap' }, t0.details) : null,
+    tinfoBox,
+    t0.details ? h('p', { class: 'hint', style: 'margin-top:8px;white-space:pre-wrap' }, t0.details) : null,
     tabs, addPane, listPane));
   ui.updateMeter(); setTab(state.tab);
 }
@@ -339,6 +367,9 @@ function personForm(p, onDone) {
     note: h('input', { value: p ? p.note || '' : '', placeholder: 'เช่น แพ้อาหาร ขอนั่งหน้า', 'aria-label': 'หมายเหตุ' })
   };
   f.addr.value = p ? p.address || '' : '';
+  const needT = needTicket(currentTrip());
+  const tickInput = h('input', { type: 'checkbox', checked: p ? !!p.ticket : false });
+  const tickRow = needT ? h('label', { class: 'tickrow' }, tickInput, icon('ticket'), h('span', null, 'ได้ตั๋วแล้ว')) : null;
   const errs = { name: h('div', { class: 'err' }), addr: h('div', { class: 'err' }), phone: h('div', { class: 'err' }) };
   const saveBtn = h('button', { class: 'btn block', style: 'margin-top:20px', type: 'submit' }, p ? 'บันทึกการแก้ไข' : 'บันทึก');
   const root = h('form', {
@@ -346,6 +377,7 @@ function personForm(p, onDone) {
       e.preventDefault();
       Object.values(errs).forEach(x => x.textContent = '');
       const v = { name: f.name.value.trim(), address: f.addr.value.trim(), phone: digits(f.phone.value), note: f.note.value.trim() };
+      if (needT) v.ticket = tickInput.checked; else if (!p) v.ticket = false;
       let bad = false;
       if (!v.name) { errs.name.textContent = 'กรอกชื่อ-นามสกุล'; bad = bad || f.name; }
       if (!v.address) { errs.addr.textContent = 'กรอกที่อยู่'; bad = bad || f.addr; }
@@ -380,8 +412,8 @@ function personForm(p, onDone) {
     h('label', null, 'ชื่อ-นามสกุล'), f.name, errs.name,
     h('label', null, 'ที่อยู่'), f.addr, errs.addr,
     h('label', null, 'เบอร์โทร'), f.phone, errs.phone,
-    h('label', null, 'หมายเหตุ ', h('small', null, '(ไม่บังคับ)')), f.note, saveBtn);
-  root.reset2 = () => { f.name.value = f.addr.value = f.phone.value = f.note.value = ''; Object.values(errs).forEach(x => x.textContent = ''); };
+    h('label', null, 'หมายเหตุ ', h('small', null, '(ไม่บังคับ)')), f.note, tickRow, saveBtn);
+  root.reset2 = () => { f.name.value = f.addr.value = f.phone.value = f.note.value = ''; tickInput.checked = false; Object.values(errs).forEach(x => x.textContent = ''); };
   root.focusName = () => f.name.focus();
   return root;
 }
@@ -394,6 +426,7 @@ function matchesPerson(p) {
   const q = state.q.trim().toLowerCase();
   if (state.filter === 'in' && !p.checkedIn) return false;
   if (state.filter === 'out' && p.checkedIn) return false;
+  if (needTicket(currentTrip())) { if (state.tfilter === 'has' && !p.ticket) return false; if (state.tfilter === 'no' && p.ticket) return false; }
   if (!q) return true;
   const dq = digits(q);
   return (p.name || '').toLowerCase().includes(q) || (dq && digits(p.phone).includes(dq));
@@ -412,6 +445,8 @@ function buildListPane(pane) {
   const stats = h('div', { class: 'stats' });
   const search = h('input', { type: 'search', placeholder: 'ค้นหาชื่อหรือเบอร์โทร', 'aria-label': 'ค้นหาชื่อหรือเบอร์โทร', value: state.q, oninput: e => { state.q = e.target.value; renderRows(); } });
   const seg = h('div', { class: 'seg' });
+  const stats2 = h('div', { class: 'stats2' });
+  const seg2 = h('div', { class: 'seg' });
   const rows = h('tbody');
   const emptyBox = h('div');
   const table = h('table', null, h('thead', null, h('tr', null, ['ลำดับ', 'ชื่อ-นามสกุล', 'ที่อยู่', 'เบอร์โทร', 'เวลาที่บันทึก', '', 'เช็คอิน'].map(x => h('th', null, x)))), rows);
@@ -428,7 +463,14 @@ function buildListPane(pane) {
       h('td', { class: 'no' }, i),
       h('td', { class: 'nm' }, h('button', { class: 'namebtn', 'aria-label': 'แก้ไข ' + p.name, onclick: () => edit(p) }, p.name)),
       h('td', { class: 'ad', onclick: () => edit(p) }, p.address),
-      h('td', { class: 'ph' }, h('a', { href: 'tel:' + digits(p.phone), 'aria-label': 'โทรหา ' + p.name }, fmtPhone(p.phone))),
+      h('td', { class: 'ph' }, h('div', { class: 'phrow' }, h('a', { href: 'tel:' + digits(p.phone), 'aria-label': 'โทรหา ' + p.name }, fmtPhone(p.phone)),
+        needTicket(currentTrip()) ? h('button', {
+          class: 'tkp' + (p.ticket ? ' on' : ''), 'aria-pressed': !!p.ticket, disabled: !!p._tmp, onclick: async () => {
+            const nv = !p.ticket; p.ticket = nv; updateUI();
+            try { await mutate(() => api('ticket', { id: p.id, value: nv })); }
+            catch (x) { p.ticket = !nv; updateUI(); toast(thaiErr(x), true); }
+          }
+        }, icon('ticket'), p.ticket ? 'ได้ตั๋วแล้ว' : 'ยังไม่มีตั๋ว') : null)),
       h('td', { class: 'tm' }, fmtT(p.createdAt), p.note ? ' · ' + p.note : ''),
       h('td', { class: 'ac' },
         h('button', { class: 'btn ghost sm', onclick: () => edit(p) }, 'แก้ไข'),
@@ -445,8 +487,11 @@ function buildListPane(pane) {
   }
   ui.updateList = () => {
     const t = currentTrip(); if (!t) return;
-    const all = tripRows(), inn = all.filter(p => p.checkedIn).length;
+    const all = tripRows(), inn = all.filter(p => p.checkedIn).length, got = all.filter(p => p.ticket).length, nt = needTicket(t);
     stats.replaceChildren(...[['ทั้งหมด', all.length], ['มาแล้ว', inn], ['ยังไม่มา', all.length - inn], ['ที่นั่งเหลือ', Math.max(0, t.capacity - all.length)]].map(([l, n]) => h('div', null, h('b', null, n), h('span', null, l))));
+    stats2.hidden = seg2.hidden = !nt;
+    stats2.replaceChildren(...(nt ? [['ได้ตั๋วแล้ว', got], ['ยังไม่มีตั๋ว', all.length - got]].map(([l, n]) => h('div', null, h('span', null, l), h('b', null, n))) : []));
+    seg2.replaceChildren(...(nt ? [['all', 'ตั๋ว: ทั้งหมด'], ['has', 'ได้ตั๋วแล้ว'], ['no', 'ยังไม่มีตั๋ว']].map(([k, l]) => h('button', { 'aria-pressed': state.tfilter === k, onclick: () => { state.tfilter = k; ui.updateList(); } }, l)) : []));
     seg.replaceChildren(...[['all', 'ทั้งหมด'], ['out', 'ยังไม่มา'], ['in', 'มาแล้ว']].map(([k, l]) => h('button', { 'aria-pressed': state.filter === k, onclick: () => { state.filter = k; ui.updateList(); } }, l)));
     renderRows();
   };
@@ -455,16 +500,17 @@ function buildListPane(pane) {
     h('button', { class: 'btn ghost sm', onclick: copyList }, 'คัดลอกรายชื่อ'),
     h('button', { class: 'btn ghost sm', onclick: () => window.print() }, 'พิมพ์'),
     h('button', { class: 'btn danger sm', onclick: deleteTrip }, 'ลบรอบนี้'));
-  pane.append(stats, h('div', { class: 'listbar' }, search), seg, emptyBox, table, tools);
+  pane.append(stats, stats2, h('div', { class: 'listbar' }, search), seg, seg2, emptyBox, table, tools);
 }
 
 /* ---------- ส่งออก / คัดลอก / ลบรอบ ---------- */
 function exportCsv() {
   const t = currentTrip();
   const q = s => '"' + String(s == null ? '' : s).replace(/"/g, '""') + '"';
-  const head = ['ลำดับ', 'ชื่อ-นามสกุล', 'ที่อยู่', 'เบอร์โทร', 'หมายเหตุ', 'สถานะ', 'เวลาที่บันทึก'];
+  const nt = needTicket(t);
+  const head = ['ลำดับ', 'ชื่อ-นามสกุล', 'ที่อยู่', 'เบอร์โทร', 'หมายเหตุ', 'สถานะ'].concat(nt ? ['ตั๋ว'] : [], ['เวลาที่บันทึก']);
   const lines = [head.map(q).join(',')].concat(tripRows().filter(p => !p._tmp).map((p, i) =>
-    [q(i + 1), q(p.name), q(p.address), '="' + digits(p.phone) + '"', q(p.note || ''), q(p.checkedIn ? 'มาแล้ว' : 'ยังไม่มา'), q(p.createdAt ? new Date(p.createdAt).toLocaleString('th-TH') : '')].join(',')));
+    [q(i + 1), q(p.name), q(p.address), '="' + digits(p.phone) + '"', q(p.note || ''), q(p.checkedIn ? 'มาแล้ว' : 'ยังไม่มา')].concat(nt ? [q(p.ticket ? 'ได้ตั๋วแล้ว' : 'ยังไม่มีตั๋ว')] : [], [q(p.createdAt ? new Date(p.createdAt).toLocaleString('th-TH') : '')]).join(',')));
   const blob = new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
   const a = h('a', { href: URL.createObjectURL(blob), download: 'รายชื่อ-' + t.name.replace(/[\\/:*?"<>|]/g, '').slice(0, 40) + '.csv' });
   document.body.append(a); a.click(); a.remove();
@@ -472,7 +518,8 @@ function exportCsv() {
   toast('ส่งออกไฟล์ CSV แล้ว');
 }
 async function copyList() {
-  const txt = tripRows().map((p, i) => (i + 1) + '. ' + p.name + '\t' + fmtPhone(p.phone) + '\t' + p.address + (p.checkedIn ? '\t(มาแล้ว)' : '')).join('\n');
+  const nt = needTicket(currentTrip());
+  const txt = tripRows().map((p, i) => (i + 1) + '. ' + p.name + '\t' + fmtPhone(p.phone) + '\t' + p.address + (nt ? (p.ticket ? '\t(ได้ตั๋ว)' : '\t(ยังไม่มีตั๋ว)') : '') + (p.checkedIn ? '\t(มาแล้ว)' : '')).join('\n');
   try { await navigator.clipboard.writeText(txt); toast('คัดลอกรายชื่อแล้ว'); } catch (e) {
     const ta = h('textarea', { readonly: true, style: 'min-height:200px' }); ta.value = txt;
     modal('คัดลอกรายชื่อ', h('div', { style: 'margin-top:10px' }, h('p', { class: 'hint' }, 'เลือกข้อความทั้งหมดแล้วคัดลอกเอง'), ta), close => [h('button', { class: 'btn ghost', onclick: close }, 'ปิด')], { focus: false });
