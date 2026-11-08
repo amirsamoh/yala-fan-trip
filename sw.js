@@ -1,5 +1,5 @@
 // Service worker: เก็บไฟล์หน้าแอปไว้ให้เปิดเร็วและเปิดได้แม้สัญญาณช้า (ข้อมูลยังต้องใช้อินเทอร์เน็ต)
-const VERSION = 'yc-v3';
+const VERSION = 'yc-v4';
 const ASSETS = ['./', 'index.html', 'app.js', 'config.js', 'manifest.webmanifest',
   'assets/logo.png', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png'];
 

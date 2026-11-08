@@ -57,7 +57,7 @@ function toggleTheme() {
 applyTheme(getTheme());
 
 /* ---------- สถานะ ---------- */
-const state = { trips: [], people: [], tripId: null, tab: 'add', filter: 'all', tfilter: 'all', q: '', shown: false, lastSync: 0 };
+const state = { trips: [], people: [], tripId: null, tab: 'add', filter: 'all', tf: 'all', pf: 'all', q: '', shown: false, lastSync: 0 };
 const ui = {};
 let pending = 0;          // จำนวนคำขอบันทึกที่ยังค้างอยู่ (ระหว่างนี้ไม่ซิงก์ทับ)
 let pollTimer = null;
@@ -208,7 +208,7 @@ function payInfo(t) {
 function route() {
   const m = /^#trip-([A-Za-z0-9]+)$/.exec(location.hash);
   if (m && state.trips.some(t => t.id === m[1])) {
-    if (state.tripId !== m[1] || !ui.updateMeter) { state.tripId = m[1]; state.tab = 'add'; state.filter = 'all'; state.tfilter = 'all'; state.q = ''; renderTrip(); }
+    if (state.tripId !== m[1] || !ui.updateMeter) { state.tripId = m[1]; state.tab = 'add'; state.filter = 'all'; state.tf = 'all'; state.pf = 'all'; state.q = ''; renderTrip(); }
   } else { state.tripId = null; renderHome(); }
 }
 function goHome() { if (location.hash === '#home') route(); else location.hash = '#home'; }
@@ -440,14 +440,11 @@ function matchesPerson(p) {
   const q = state.q.trim().toLowerCase();
   if (state.filter === 'in' && !p.checkedIn) return false;
   if (state.filter === 'out' && p.checkedIn) return false;
-  if (needTicket(currentTrip())) {
-    const f = state.tfilter;
-    if (f === 'has' && !p.ticket) return false;
-    if (f === 'no' && p.ticket) return false;
-    if (f === 'paid' && !p.paid) return false;
-    if (f === 'unpaid' && p.paid) return false;
-    if (f === 'paidNoTicket' && !(p.paid && !p.ticket)) return false;
-    if (f === 'ticketUnpaid' && !(p.ticket && !p.paid)) return false;
+  if (needTicket(currentTrip())) {            // ตัวกรองตั๋วและเงินใช้พร้อมกันได้ (ต้องตรงทั้งคู่)
+    if (state.tf === 'has' && !p.ticket) return false;
+    if (state.tf === 'no' && p.ticket) return false;
+    if (state.pf === 'paid' && !p.paid) return false;
+    if (state.pf === 'unpaid' && p.paid) return false;
   }
   if (!q) return true;
   const dq = digits(q);
@@ -468,7 +465,9 @@ function buildListPane(pane) {
   const search = h('input', { type: 'search', placeholder: 'ค้นหาชื่อหรือเบอร์โทร', 'aria-label': 'ค้นหาชื่อหรือเบอร์โทร', value: state.q, oninput: e => { state.q = e.target.value; renderRows(); } });
   const seg = h('div', { class: 'seg' });
   const stats2 = h('div', { class: 'stats2' });
-  const seg2 = h('div', { class: 'seg scroll' });
+  const segT = h('div', { class: 'seg' });
+  const segP = h('div', { class: 'seg' });
+  const segS = h('div', { class: 'seg scroll' });
   const rows = h('tbody');
   const emptyBox = h('div');
   const table = h('table', null, h('thead', null, h('tr', null, ['ลำดับ', 'ชื่อ-นามสกุล', 'ที่อยู่', 'เบอร์โทร', 'เวลาที่บันทึก', '', 'เช็คอิน'].map(x => h('th', null, x)))), rows);
@@ -519,16 +518,26 @@ function buildListPane(pane) {
     const t = currentTrip(); if (!t) return;
     const all = tripRows(), inn = all.filter(p => p.checkedIn).length, got = all.filter(p => p.ticket).length, nt = needTicket(t);
     stats.replaceChildren(...[['ทั้งหมด', all.length], ['มาแล้ว', inn], ['ยังไม่มา', all.length - inn], ['ที่นั่งเหลือ', Math.max(0, t.capacity - all.length)]].map(([l, n]) => h('div', null, h('b', null, n), h('span', null, l))));
-    stats2.hidden = seg2.hidden = !nt;
+    stats2.hidden = segT.hidden = segP.hidden = segS.hidden = !nt;
     const pi = payInfo(t), paidN = all.filter(p => p.paid).length;
     const stat = (l, n) => h('div', null, h('span', null, l), h('b', null, n));
     stats2.replaceChildren(...(nt ? [stat('ได้ตั๋วแล้ว', got), stat('ยังไม่มีตั๋ว', all.length - got),
       pi.price ? stat('เก็บแล้ว', money(pi.got)) : stat('จ่ายแล้ว', paidN),
       pi.price ? stat('ค้างจ่าย', money(pi.left)) : stat('ยังไม่จ่าย', all.length - paidN)] : []));
-    const cnt = f => all.filter(p => f === 'all' ? true : f === 'has' ? p.ticket : f === 'no' ? !p.ticket : f === 'paid' ? p.paid : f === 'unpaid' ? !p.paid : f === 'paidNoTicket' ? (p.paid && !p.ticket) : (p.ticket && !p.paid)).length;
-    seg2.replaceChildren(...(nt ? [['all', 'ตั๋ว/เงิน: ทั้งหมด'], ['no', 'ยังไม่มีตั๋ว'], ['has', 'ได้ตั๋วแล้ว'], ['unpaid', 'ยังไม่จ่าย'], ['paid', 'จ่ายแล้ว'],
-      ['paidNoTicket', 'จ่ายแล้ว-ยังไม่มีตั๋ว'], ['ticketUnpaid', 'ได้ตั๋ว-ยังไม่จ่าย']].map(([k, l]) =>
-      h('button', { 'aria-pressed': state.tfilter === k, onclick: () => { state.tfilter = k; ui.updateList(); } }, k === 'all' ? l : l + ' (' + cnt(k) + ')')) : []));
+    const setF = (tf, pf) => { state.tf = tf; state.pf = pf; ui.updateList(); };
+    const chip = (on, label, fn) => h('button', { 'aria-pressed': on, onclick: fn }, label);
+    const nTicket = { has: got, no: all.length - got }, nPaid = { paid: paidN, unpaid: all.length - paidN };
+    segT.replaceChildren(...(nt ? [chip(state.tf === 'all', 'ตั๋ว: ทั้งหมด', () => setF('all', state.pf)),
+      chip(state.tf === 'no', 'ยังไม่มีตั๋ว (' + nTicket.no + ')', () => setF('no', state.pf)),
+      chip(state.tf === 'has', 'ได้ตั๋วแล้ว (' + nTicket.has + ')', () => setF('has', state.pf))] : []));
+    segP.replaceChildren(...(nt ? [chip(state.pf === 'all', 'เงิน: ทั้งหมด', () => setF(state.tf, 'all')),
+      chip(state.pf === 'unpaid', 'ยังไม่จ่าย (' + nPaid.unpaid + ')', () => setF(state.tf, 'unpaid')),
+      chip(state.pf === 'paid', 'จ่ายแล้ว (' + nPaid.paid + ')', () => setF(state.tf, 'paid'))] : []));
+    // ทางลัดสองกลุ่มที่ต้องตามงาน: กดครั้งเดียวตั้งตัวกรองทั้งสองแถวให้ กดซ้ำเพื่อล้าง
+    const combo = (tf, pf, label, n) => { const on = state.tf === tf && state.pf === pf; return chip(on, label + ' (' + n + ')', () => on ? setF('all', 'all') : setF(tf, pf)); };
+    const nPaidNoT = all.filter(p => p.paid && !p.ticket).length, nTUnpaid = all.filter(p => p.ticket && !p.paid).length;
+    segS.replaceChildren(...(nt ? [combo('no', 'paid', 'จ่ายแล้ว-ยังไม่มีตั๋ว', nPaidNoT), combo('has', 'unpaid', 'ได้ตั๋ว-ยังไม่จ่าย', nTUnpaid),
+      (state.tf !== 'all' || state.pf !== 'all') ? chip(false, 'ล้างตัวกรอง', () => setF('all', 'all')) : null].filter(Boolean) : []));
     seg.replaceChildren(...[['all', 'ทั้งหมด'], ['out', 'ยังไม่มา'], ['in', 'มาแล้ว']].map(([k, l]) => h('button', { 'aria-pressed': state.filter === k, onclick: () => { state.filter = k; ui.updateList(); } }, l)));
     renderRows();
   };
@@ -537,7 +546,7 @@ function buildListPane(pane) {
     h('button', { class: 'btn ghost sm', onclick: copyList }, 'คัดลอกรายชื่อ'),
     h('button', { class: 'btn ghost sm', onclick: () => window.print() }, 'พิมพ์'),
     h('button', { class: 'btn danger sm', onclick: deleteTrip }, 'ลบรอบนี้'));
-  pane.append(stats, stats2, h('div', { class: 'listbar' }, search), seg, seg2, emptyBox, table, tools);
+  pane.append(stats, stats2, h('div', { class: 'listbar' }, search), seg, segT, segP, segS, emptyBox, table, tools);
 }
 
 /* ---------- ส่งออก / คัดลอก / ลบรอบ ---------- */
