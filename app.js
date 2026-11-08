@@ -33,6 +33,7 @@ const ICONS = {
   back: '<path d="M19 12H5M12 19l-7-7 7-7"/>',
   check: '<path d="M20 6 9 17l-5-5"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
+  baht: '<circle cx="12" cy="12" r="9"/><path d="M12 6.5v11M9.5 8.5h3.2a1.9 1.9 0 0 1 0 3.8H9.5h3.7a1.9 1.9 0 0 1 0 3.8H9.5"/>',
   ticket: '<path d="M4 6h16v4a2 2 0 0 0 0 4v4H4v-4a2 2 0 0 0 0-4z"/><path d="M14 6v2M14 11v2M14 16v2"/>'
 };
 function icon(n) {
@@ -197,6 +198,13 @@ window.addEventListener('hashchange', () => { if (state.shown) route(); });
 const currentTrip = () => state.trips.find(t => t.id === state.tripId);
 const needTicket = t => !!t && t.ticketMode === 'required';
 const ticketCount = (tripId) => state.people.filter(p => p.tripId === tripId && p.ticket).length;
+const paidCount = (tripId) => state.people.filter(p => p.tripId === tripId && p.paid).length;
+const money = n => '฿' + Math.round(n).toLocaleString('th-TH');
+// สรุปเงินของรอบ: ราคา × จำนวนคน (ตามรายชื่อที่บันทึก)
+function payInfo(t) {
+  const n = state.people.filter(p => p.tripId === t.id).length, paid = paidCount(t.id), price = t.ticketPrice || 0;
+  return { n, paid, price, due: price * n, got: price * paid, left: price * (n - paid) };
+}
 function route() {
   const m = /^#trip-([A-Za-z0-9]+)$/.exec(location.hash);
   if (m && state.trips.some(t => t.id === m[1])) {
@@ -262,6 +270,7 @@ function renderHome() {
         h('p', null, fmtDT(t.datetime)), t.place ? h('p', null, 'จุดนัดพบ: ' + t.place) : null,
         h('p', { style: 'margin-top:6px' }, h('span', { class: 'tag' + (needTicket(t) ? ' req' : '') }, icon('ticket'), needTicket(t) ? 'ต้องมีตั๋ว' : 'เข้าฟรี ไม่ใช้ตั๋ว'),
           needTicket(t) ? h('span', { style: 'margin-left:8px' }, 'ได้ตั๋วแล้ว ' + ticketCount(t.id) + ' / ' + s.n + ' คน') : null),
+        needTicket(t) ? h('p', null, (() => { const pi = payInfo(t); return pi.price ? 'เก็บเงินแล้ว ' + money(pi.got) + ' / ' + money(pi.due) + ' (จ่ายแล้ว ' + pi.paid + ' คน)' : 'จ่ายแล้ว ' + pi.paid + ' / ' + pi.n + ' คน'; })()) : null,
         h('div', { class: 'num' }, s.n + ' / ' + t.capacity, h('span', null, ' คน')),
         h('div', { class: 'bar' + (s.n >= t.capacity ? ' full' : '') }, h('div', { style: 'width:' + pct + '%' })));
     };
@@ -282,11 +291,12 @@ function tripForm(t) {
     place: h('input', { value: t ? t.place || '' : '', placeholder: 'เช่น หน้าสนามกีฬากลางจังหวัดยะลา' }),
     cap: h('input', { type: 'number', inputmode: 'numeric', min: '1', value: t ? t.capacity : '40' }),
     note: h('textarea', { placeholder: 'เช่น ค่ารถ เวลาออกเดินทาง ของที่ต้องเตรียม' }),
-    tinfo: h('input', { value: t ? t.ticketInfo || '' : '', placeholder: 'เช่น ใบละ 100 บาท เปิดขาย 10 พ.ย.' })
+    tinfo: h('input', { value: t ? t.ticketInfo || '' : '', placeholder: 'เช่น เปิดขาย 10 พ.ย. ซื้อที่ไหน' }),
+    tprice: h('input', { type: 'number', inputmode: 'numeric', min: '0', value: t && t.ticketPrice ? t.ticketPrice : '', placeholder: 'เช่น 100' })
   };
   f.note.value = t ? t.details || '' : '';
   let tmode = t ? (t.ticketMode || 'none') : 'none';
-  const tinfoWrap = h('div', null, h('label', null, 'รายละเอียดตั๋ว ', h('small', null, '(ไม่บังคับ)')), f.tinfo);
+  const tinfoWrap = h('div', null, h('label', null, 'ราคาตั๋วต่อใบ (บาท) ', h('small', null, '(ใช้คำนวณยอดเงิน ไม่บังคับ)')), f.tprice, h('label', null, 'รายละเอียดตั๋ว ', h('small', null, '(ไม่บังคับ)')), f.tinfo);
   const modeSeg = h('div', { class: 'seg' });
   const paintMode = () => {
     modeSeg.replaceChildren(...[['none', 'ไม่ใช้ตั๋ว (เข้าฟรี)'], ['required', 'ต้องมีตั๋ว']].map(([k, l]) =>
@@ -311,7 +321,7 @@ function tripForm(t) {
         if (!(cap >= 1)) { err.textContent = 'จำนวนที่นั่งต้องเป็นตัวเลขตั้งแต่ 1 ขึ้นไป'; f.cap.focus(); return; }
         btn.disabled = true; btn.textContent = 'กำลังบันทึก…';
         try {
-          const j = await mutate(() => api('tripSave', { trip: Object.assign(t ? { id: t.id } : {}, { name, datetime: f.dt.value, place: f.place.value.trim(), details: f.note.value.trim(), capacity: cap, ticketMode: tmode, ticketInfo: tmode === 'required' ? f.tinfo.value.trim() : '' }) }));
+          const j = await mutate(() => api('tripSave', { trip: Object.assign(t ? { id: t.id } : {}, { name, datetime: f.dt.value, place: f.place.value.trim(), details: f.note.value.trim(), capacity: cap, ticketMode: tmode, ticketInfo: tmode === 'required' ? f.tinfo.value.trim() : '', ticketPrice: tmode === 'required' ? (parseInt(f.tprice.value, 10) || 0) : 0 }) }));
           upsert(state.trips, j.trip); close(); updateUI(); toast(t ? 'บันทึกการแก้ไขแล้ว' : 'เพิ่มรอบแล้ว');
         } catch (x) { err.textContent = thaiErr(x); btn.disabled = false; btn.textContent = t ? 'บันทึกการแก้ไข' : 'เพิ่มรอบ'; }
       }
@@ -336,9 +346,10 @@ function renderTrip() {
         h('span', { class: 'txt' }, 'บันทึกแล้ว ', h('b', null, n), ' / ทั้งหมด ', h('b', null, t.capacity), ' คน ',
           left > 0 ? ['เหลืออีก ', h('b', null, left), ' ที่นั่ง'] : (left === 0 ? h('b', null, 'เต็มแล้ว') : h('b', { style: 'color:var(--warn)' }, 'เกินมา ' + (-left) + ' คน')))),
       h('div', { class: 'bar' + (n >= t.capacity ? ' full' : ''), role: 'progressbar', 'aria-valuenow': n, 'aria-valuemax': t.capacity }, h('div', { style: 'width:' + pct + '%' })),
-      needTicket(t) ? h('div', { class: 'tmeter' }, icon('ticket'), h('span', null, 'ได้ตั๋วแล้ว ', h('b', null, ticketCount(t.id)), ' / ' + n + ' คน · ยังขาด ', h('b', null, n - ticketCount(t.id)))) : null);
+      needTicket(t) ? h('div', { class: 'tmeter' }, icon('ticket'), h('span', null, 'ได้ตั๋วแล้ว ', h('b', null, ticketCount(t.id)), ' / ' + n + ' คน · ยังขาด ', h('b', null, n - ticketCount(t.id)))) : null,
+      needTicket(t) ? (() => { const pi = payInfo(t); return h('div', { class: 'tmeter' }, icon('baht'), h('span', null, 'จ่ายแล้ว ', h('b', null, pi.paid), ' / ' + pi.n + ' คน', pi.price ? [' · เก็บแล้ว ', h('b', null, money(pi.got)), ' / ' + money(pi.due)] : '')); })() : null);
     setKids(tinfoBox, h('span', { class: 'tag' + (needTicket(t) ? ' req' : '') }, icon('ticket'), needTicket(t) ? 'ต้องมีตั๋ว' : 'เข้าฟรี ไม่ใช้ตั๋ว'),
-      needTicket(t) && t.ticketInfo ? h('span', { class: 'hint', style: 'margin-left:8px' }, t.ticketInfo) : null);
+      needTicket(t) && (t.ticketPrice || t.ticketInfo) ? h('span', { class: 'hint', style: 'margin-left:8px' }, [t.ticketPrice ? 'ใบละ ' + money(t.ticketPrice) : '', t.ticketInfo].filter(Boolean).join(' · ')) : null);
   };
   const setTab = k => {
     state.tab = k; addPane.hidden = k !== 'add'; listPane.hidden = k !== 'list';
@@ -369,7 +380,10 @@ function personForm(p, onDone) {
   f.addr.value = p ? p.address || '' : '';
   const needT = needTicket(currentTrip());
   const tickInput = h('input', { type: 'checkbox', checked: p ? !!p.ticket : false });
-  const tickRow = needT ? h('label', { class: 'tickrow' }, tickInput, icon('ticket'), h('span', null, 'ได้ตั๋วแล้ว')) : null;
+  const paidInput = h('input', { type: 'checkbox', checked: p ? !!p.paid : false });
+  const tickRow = needT ? h('div', { class: 'tickrows' },
+    h('label', { class: 'tickrow' }, tickInput, icon('ticket'), h('span', null, 'ได้ตั๋วแล้ว')),
+    h('label', { class: 'tickrow' }, paidInput, icon('baht'), h('span', null, 'จ่ายแล้ว'))) : null;
   const errs = { name: h('div', { class: 'err' }), addr: h('div', { class: 'err' }), phone: h('div', { class: 'err' }) };
   const saveBtn = h('button', { class: 'btn block', style: 'margin-top:20px', type: 'submit' }, p ? 'บันทึกการแก้ไข' : 'บันทึก');
   const root = h('form', {
@@ -377,7 +391,7 @@ function personForm(p, onDone) {
       e.preventDefault();
       Object.values(errs).forEach(x => x.textContent = '');
       const v = { name: f.name.value.trim(), address: f.addr.value.trim(), phone: digits(f.phone.value), note: f.note.value.trim() };
-      if (needT) v.ticket = tickInput.checked; else if (!p) v.ticket = false;
+      if (needT) { v.ticket = tickInput.checked; v.paid = paidInput.checked; } else if (!p) { v.ticket = false; v.paid = false; }
       let bad = false;
       if (!v.name) { errs.name.textContent = 'กรอกชื่อ-นามสกุล'; bad = bad || f.name; }
       if (!v.address) { errs.addr.textContent = 'กรอกที่อยู่'; bad = bad || f.addr; }
@@ -413,7 +427,7 @@ function personForm(p, onDone) {
     h('label', null, 'ที่อยู่'), f.addr, errs.addr,
     h('label', null, 'เบอร์โทร'), f.phone, errs.phone,
     h('label', null, 'หมายเหตุ ', h('small', null, '(ไม่บังคับ)')), f.note, tickRow, saveBtn);
-  root.reset2 = () => { f.name.value = f.addr.value = f.phone.value = f.note.value = ''; tickInput.checked = false; Object.values(errs).forEach(x => x.textContent = ''); };
+  root.reset2 = () => { f.name.value = f.addr.value = f.phone.value = f.note.value = ''; tickInput.checked = false; paidInput.checked = false; Object.values(errs).forEach(x => x.textContent = ''); };
   root.focusName = () => f.name.focus();
   return root;
 }
@@ -426,7 +440,15 @@ function matchesPerson(p) {
   const q = state.q.trim().toLowerCase();
   if (state.filter === 'in' && !p.checkedIn) return false;
   if (state.filter === 'out' && p.checkedIn) return false;
-  if (needTicket(currentTrip())) { if (state.tfilter === 'has' && !p.ticket) return false; if (state.tfilter === 'no' && p.ticket) return false; }
+  if (needTicket(currentTrip())) {
+    const f = state.tfilter;
+    if (f === 'has' && !p.ticket) return false;
+    if (f === 'no' && p.ticket) return false;
+    if (f === 'paid' && !p.paid) return false;
+    if (f === 'unpaid' && p.paid) return false;
+    if (f === 'paidNoTicket' && !(p.paid && !p.ticket)) return false;
+    if (f === 'ticketUnpaid' && !(p.ticket && !p.paid)) return false;
+  }
   if (!q) return true;
   const dq = digits(q);
   return (p.name || '').toLowerCase().includes(q) || (dq && digits(p.phone).includes(dq));
@@ -446,7 +468,7 @@ function buildListPane(pane) {
   const search = h('input', { type: 'search', placeholder: 'ค้นหาชื่อหรือเบอร์โทร', 'aria-label': 'ค้นหาชื่อหรือเบอร์โทร', value: state.q, oninput: e => { state.q = e.target.value; renderRows(); } });
   const seg = h('div', { class: 'seg' });
   const stats2 = h('div', { class: 'stats2' });
-  const seg2 = h('div', { class: 'seg' });
+  const seg2 = h('div', { class: 'seg scroll' });
   const rows = h('tbody');
   const emptyBox = h('div');
   const table = h('table', null, h('thead', null, h('tr', null, ['ลำดับ', 'ชื่อ-นามสกุล', 'ที่อยู่', 'เบอร์โทร', 'เวลาที่บันทึก', '', 'เช็คอิน'].map(x => h('th', null, x)))), rows);
@@ -464,13 +486,21 @@ function buildListPane(pane) {
       h('td', { class: 'nm' }, h('button', { class: 'namebtn', 'aria-label': 'แก้ไข ' + p.name, onclick: () => edit(p) }, p.name)),
       h('td', { class: 'ad', onclick: () => edit(p) }, p.address),
       h('td', { class: 'ph' }, h('div', { class: 'phrow' }, h('a', { href: 'tel:' + digits(p.phone), 'aria-label': 'โทรหา ' + p.name }, fmtPhone(p.phone)),
+        needTicket(currentTrip()) ? h('span', { class: 'br' }) : null,
         needTicket(currentTrip()) ? h('button', {
           class: 'tkp' + (p.ticket ? ' on' : ''), 'aria-pressed': !!p.ticket, disabled: !!p._tmp, onclick: async () => {
             const nv = !p.ticket; p.ticket = nv; updateUI();
             try { await mutate(() => api('ticket', { id: p.id, value: nv })); }
             catch (x) { p.ticket = !nv; updateUI(); toast(thaiErr(x), true); }
           }
-        }, icon('ticket'), p.ticket ? 'ได้ตั๋วแล้ว' : 'ยังไม่มีตั๋ว') : null)),
+        }, icon('ticket'), p.ticket ? 'ได้ตั๋วแล้ว' : 'ยังไม่มีตั๋ว') : null,
+        needTicket(currentTrip()) ? h('button', {
+          class: 'tkp pay' + (p.paid ? ' on' : ''), 'aria-pressed': !!p.paid, disabled: !!p._tmp, onclick: async () => {
+            const nv = !p.paid; const was = p.paidAt; p.paid = nv; p.paidAt = nv ? Date.now() : 0; updateUI();
+            try { await mutate(() => api('paid', { id: p.id, value: nv })); }
+            catch (x) { p.paid = !nv; p.paidAt = was; updateUI(); toast(thaiErr(x), true); }
+          }
+        }, icon('baht'), p.paid ? 'จ่ายแล้ว' : 'ยังไม่จ่าย') : null)),
       h('td', { class: 'tm' }, fmtT(p.createdAt), p.note ? ' · ' + p.note : ''),
       h('td', { class: 'ac' },
         h('button', { class: 'btn ghost sm', onclick: () => edit(p) }, 'แก้ไข'),
@@ -490,8 +520,15 @@ function buildListPane(pane) {
     const all = tripRows(), inn = all.filter(p => p.checkedIn).length, got = all.filter(p => p.ticket).length, nt = needTicket(t);
     stats.replaceChildren(...[['ทั้งหมด', all.length], ['มาแล้ว', inn], ['ยังไม่มา', all.length - inn], ['ที่นั่งเหลือ', Math.max(0, t.capacity - all.length)]].map(([l, n]) => h('div', null, h('b', null, n), h('span', null, l))));
     stats2.hidden = seg2.hidden = !nt;
-    stats2.replaceChildren(...(nt ? [['ได้ตั๋วแล้ว', got], ['ยังไม่มีตั๋ว', all.length - got]].map(([l, n]) => h('div', null, h('span', null, l), h('b', null, n))) : []));
-    seg2.replaceChildren(...(nt ? [['all', 'ตั๋ว: ทั้งหมด'], ['has', 'ได้ตั๋วแล้ว'], ['no', 'ยังไม่มีตั๋ว']].map(([k, l]) => h('button', { 'aria-pressed': state.tfilter === k, onclick: () => { state.tfilter = k; ui.updateList(); } }, l)) : []));
+    const pi = payInfo(t), paidN = all.filter(p => p.paid).length;
+    const stat = (l, n) => h('div', null, h('span', null, l), h('b', null, n));
+    stats2.replaceChildren(...(nt ? [stat('ได้ตั๋วแล้ว', got), stat('ยังไม่มีตั๋ว', all.length - got),
+      pi.price ? stat('เก็บแล้ว', money(pi.got)) : stat('จ่ายแล้ว', paidN),
+      pi.price ? stat('ค้างจ่าย', money(pi.left)) : stat('ยังไม่จ่าย', all.length - paidN)] : []));
+    const cnt = f => all.filter(p => f === 'all' ? true : f === 'has' ? p.ticket : f === 'no' ? !p.ticket : f === 'paid' ? p.paid : f === 'unpaid' ? !p.paid : f === 'paidNoTicket' ? (p.paid && !p.ticket) : (p.ticket && !p.paid)).length;
+    seg2.replaceChildren(...(nt ? [['all', 'ตั๋ว/เงิน: ทั้งหมด'], ['no', 'ยังไม่มีตั๋ว'], ['has', 'ได้ตั๋วแล้ว'], ['unpaid', 'ยังไม่จ่าย'], ['paid', 'จ่ายแล้ว'],
+      ['paidNoTicket', 'จ่ายแล้ว-ยังไม่มีตั๋ว'], ['ticketUnpaid', 'ได้ตั๋ว-ยังไม่จ่าย']].map(([k, l]) =>
+      h('button', { 'aria-pressed': state.tfilter === k, onclick: () => { state.tfilter = k; ui.updateList(); } }, k === 'all' ? l : l + ' (' + cnt(k) + ')')) : []));
     seg.replaceChildren(...[['all', 'ทั้งหมด'], ['out', 'ยังไม่มา'], ['in', 'มาแล้ว']].map(([k, l]) => h('button', { 'aria-pressed': state.filter === k, onclick: () => { state.filter = k; ui.updateList(); } }, l)));
     renderRows();
   };
@@ -508,9 +545,9 @@ function exportCsv() {
   const t = currentTrip();
   const q = s => '"' + String(s == null ? '' : s).replace(/"/g, '""') + '"';
   const nt = needTicket(t);
-  const head = ['ลำดับ', 'ชื่อ-นามสกุล', 'ที่อยู่', 'เบอร์โทร', 'หมายเหตุ', 'สถานะ'].concat(nt ? ['ตั๋ว'] : [], ['เวลาที่บันทึก']);
+  const head = ['ลำดับ', 'ชื่อ-นามสกุล', 'ที่อยู่', 'เบอร์โทร', 'หมายเหตุ', 'สถานะ'].concat(nt ? ['ตั๋ว', 'ค่าตั๋ว', 'เวลาที่จ่าย'] : [], ['เวลาที่บันทึก']);
   const lines = [head.map(q).join(',')].concat(tripRows().filter(p => !p._tmp).map((p, i) =>
-    [q(i + 1), q(p.name), q(p.address), '="' + digits(p.phone) + '"', q(p.note || ''), q(p.checkedIn ? 'มาแล้ว' : 'ยังไม่มา')].concat(nt ? [q(p.ticket ? 'ได้ตั๋วแล้ว' : 'ยังไม่มีตั๋ว')] : [], [q(p.createdAt ? new Date(p.createdAt).toLocaleString('th-TH') : '')]).join(',')));
+    [q(i + 1), q(p.name), q(p.address), '="' + digits(p.phone) + '"', q(p.note || ''), q(p.checkedIn ? 'มาแล้ว' : 'ยังไม่มา')].concat(nt ? [q(p.ticket ? 'ได้ตั๋วแล้ว' : 'ยังไม่มีตั๋ว'), q(p.paid ? 'จ่ายแล้ว' : 'ยังไม่จ่าย'), q(p.paidAt ? new Date(p.paidAt).toLocaleString('th-TH') : '')] : [], [q(p.createdAt ? new Date(p.createdAt).toLocaleString('th-TH') : '')]).join(',')));
   const blob = new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
   const a = h('a', { href: URL.createObjectURL(blob), download: 'รายชื่อ-' + t.name.replace(/[\\/:*?"<>|]/g, '').slice(0, 40) + '.csv' });
   document.body.append(a); a.click(); a.remove();
@@ -519,7 +556,7 @@ function exportCsv() {
 }
 async function copyList() {
   const nt = needTicket(currentTrip());
-  const txt = tripRows().map((p, i) => (i + 1) + '. ' + p.name + '\t' + fmtPhone(p.phone) + '\t' + p.address + (nt ? (p.ticket ? '\t(ได้ตั๋ว)' : '\t(ยังไม่มีตั๋ว)') : '') + (p.checkedIn ? '\t(มาแล้ว)' : '')).join('\n');
+  const txt = tripRows().map((p, i) => (i + 1) + '. ' + p.name + '\t' + fmtPhone(p.phone) + '\t' + p.address + (nt ? (p.ticket ? '\t(ได้ตั๋ว)' : '\t(ยังไม่มีตั๋ว)') + (p.paid ? '\t(จ่ายแล้ว)' : '\t(ยังไม่จ่าย)') : '') + (p.checkedIn ? '\t(มาแล้ว)' : '')).join('\n');
   try { await navigator.clipboard.writeText(txt); toast('คัดลอกรายชื่อแล้ว'); } catch (e) {
     const ta = h('textarea', { readonly: true, style: 'min-height:200px' }); ta.value = txt;
     modal('คัดลอกรายชื่อ', h('div', { style: 'margin-top:10px' }, h('p', { class: 'hint' }, 'เลือกข้อความทั้งหมดแล้วคัดลอกเอง'), ta), close => [h('button', { class: 'btn ghost', onclick: close }, 'ปิด')], { focus: false });
