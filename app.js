@@ -440,11 +440,14 @@ function matchesPerson(p) {
   const q = state.q.trim().toLowerCase();
   if (state.filter === 'in' && !p.checkedIn) return false;
   if (state.filter === 'out' && p.checkedIn) return false;
-  if (needTicket(currentTrip())) {            // ตัวกรองตั๋วและเงินใช้พร้อมกันได้ (ต้องตรงทั้งคู่)
+  if (needTicket(currentTrip())) {
     if (state.tf === 'has' && !p.ticket) return false;
     if (state.tf === 'no' && p.ticket) return false;
-    if (state.pf === 'paid' && !p.paid) return false;
-    if (state.pf === 'unpaid' && p.paid) return false;
+    const f = state.pf;
+    if (f === 'paid' && !p.paid) return false;
+    if (f === 'unpaid' && p.paid) return false;
+    if (f === 'paidNoTicket' && !(p.paid && !p.ticket)) return false;   // เก็บเงินแล้ว รอซื้อตั๋ว
+    if (f === 'ticketUnpaid' && !(p.ticket && !p.paid)) return false;   // ได้ตั๋วแล้ว ต้องตามเก็บเงิน
   }
   if (!q) return true;
   const dq = digits(q);
@@ -466,8 +469,7 @@ function buildListPane(pane) {
   const seg = h('div', { class: 'seg' });
   const stats2 = h('div', { class: 'stats2' });
   const segT = h('div', { class: 'seg' });
-  const segP = h('div', { class: 'seg' });
-  const segS = h('div', { class: 'seg scroll' });
+  const segP = h('div', { class: 'seg pay' });
   const rows = h('tbody');
   const emptyBox = h('div');
   const table = h('table', null, h('thead', null, h('tr', null, ['ลำดับ', 'ชื่อ-นามสกุล', 'ที่อยู่', 'เบอร์โทร', 'เวลาที่บันทึก', '', 'เช็คอิน'].map(x => h('th', null, x)))), rows);
@@ -518,26 +520,28 @@ function buildListPane(pane) {
     const t = currentTrip(); if (!t) return;
     const all = tripRows(), inn = all.filter(p => p.checkedIn).length, got = all.filter(p => p.ticket).length, nt = needTicket(t);
     stats.replaceChildren(...[['ทั้งหมด', all.length], ['มาแล้ว', inn], ['ยังไม่มา', all.length - inn], ['ที่นั่งเหลือ', Math.max(0, t.capacity - all.length)]].map(([l, n]) => h('div', null, h('b', null, n), h('span', null, l))));
-    stats2.hidden = segT.hidden = segP.hidden = segS.hidden = !nt;
+    stats2.hidden = segT.hidden = segP.hidden = !nt;
     const pi = payInfo(t), paidN = all.filter(p => p.paid).length;
     const stat = (l, n) => h('div', null, h('span', null, l), h('b', null, n));
     stats2.replaceChildren(...(nt ? [stat('ได้ตั๋วแล้ว', got), stat('ยังไม่มีตั๋ว', all.length - got),
       pi.price ? stat('เก็บแล้ว', money(pi.got)) : stat('จ่ายแล้ว', paidN),
       pi.price ? stat('ค้างจ่าย', money(pi.left)) : stat('ยังไม่จ่าย', all.length - paidN)] : []));
-    const setF = (tf, pf) => { state.tf = tf; state.pf = pf; ui.updateList(); };
-    const chip = (on, label, fn) => h('button', { 'aria-pressed': on, onclick: fn }, label);
-    const nTicket = { has: got, no: all.length - got }, nPaid = { paid: paidN, unpaid: all.length - paidN };
-    segT.replaceChildren(...(nt ? [chip(state.tf === 'all', 'ตั๋ว: ทั้งหมด', () => setF('all', state.pf)),
-      chip(state.tf === 'no', 'ยังไม่มีตั๋ว (' + nTicket.no + ')', () => setF('no', state.pf)),
-      chip(state.tf === 'has', 'ได้ตั๋วแล้ว (' + nTicket.has + ')', () => setF('has', state.pf))] : []));
-    segP.replaceChildren(...(nt ? [chip(state.pf === 'all', 'เงิน: ทั้งหมด', () => setF(state.tf, 'all')),
-      chip(state.pf === 'unpaid', 'ยังไม่จ่าย (' + nPaid.unpaid + ')', () => setF(state.tf, 'unpaid')),
-      chip(state.pf === 'paid', 'จ่ายแล้ว (' + nPaid.paid + ')', () => setF(state.tf, 'paid'))] : []));
-    // ทางลัดสองกลุ่มที่ต้องตามงาน: กดครั้งเดียวตั้งตัวกรองทั้งสองแถวให้ กดซ้ำเพื่อล้าง
-    const combo = (tf, pf, label, n) => { const on = state.tf === tf && state.pf === pf; return chip(on, label + ' (' + n + ')', () => on ? setF('all', 'all') : setF(tf, pf)); };
+    const isCombo = state.pf === 'paidNoTicket' || state.pf === 'ticketUnpaid';
+    const chip = (on, label, fn, cls) => h('button', { class: cls || null, 'aria-pressed': on, onclick: fn }, label);
+    // กดตัวกรองตั๋ว: ถ้ากลุ่มสำคัญด้านเงินเปิดอยู่ ให้ล้างแถวเงินกลับเป็น "ทั้งหมด" (กันเงื่อนไขขัดกัน)
+    const setT = v => { state.tf = v; if (isCombo) state.pf = 'all'; ui.updateList(); };
+    // กดกลุ่มสำคัญด้านเงิน: แถวตั๋วกลับเป็น "ทั้งหมด" เพราะกลุ่มนั้นคุมเงื่อนไขตั๋วอยู่แล้ว
+    const setP = v => { state.pf = v; if (v === 'paidNoTicket' || v === 'ticketUnpaid') state.tf = 'all'; ui.updateList(); };
     const nPaidNoT = all.filter(p => p.paid && !p.ticket).length, nTUnpaid = all.filter(p => p.ticket && !p.paid).length;
-    segS.replaceChildren(...(nt ? [combo('no', 'paid', 'จ่ายแล้ว-ยังไม่มีตั๋ว', nPaidNoT), combo('has', 'unpaid', 'ได้ตั๋ว-ยังไม่จ่าย', nTUnpaid),
-      (state.tf !== 'all' || state.pf !== 'all') ? chip(false, 'ล้างตัวกรอง', () => setF('all', 'all')) : null].filter(Boolean) : []));
+    segT.classList.toggle('dim', isCombo);
+    segT.replaceChildren(...(nt ? [chip(state.tf === 'all', 'ตั๋ว: ทั้งหมด', () => setT('all')),
+      chip(state.tf === 'no', 'ยังไม่มีตั๋ว (' + (all.length - got) + ')', () => setT('no')),
+      chip(state.tf === 'has', 'ได้ตั๋วแล้ว (' + got + ')', () => setT('has'))] : []));
+    segP.replaceChildren(...(nt ? [chip(state.pf === 'all', 'เงิน: ทั้งหมด', () => setP('all')),
+      chip(state.pf === 'unpaid', 'ยังไม่จ่าย (' + (all.length - paidN) + ')', () => setP('unpaid')),
+      chip(state.pf === 'paid', 'จ่ายแล้ว (' + paidN + ')', () => setP('paid')),
+      chip(state.pf === 'paidNoTicket', 'จ่ายแล้ว-ไม่มีตั๋ว (' + nPaidNoT + ')', () => setP(state.pf === 'paidNoTicket' ? 'all' : 'paidNoTicket'), 'combo'),
+      chip(state.pf === 'ticketUnpaid', 'มีตั๋ว-ไม่จ่าย (' + nTUnpaid + ')', () => setP(state.pf === 'ticketUnpaid' ? 'all' : 'ticketUnpaid'), 'combo')] : []));
     seg.replaceChildren(...[['all', 'ทั้งหมด'], ['out', 'ยังไม่มา'], ['in', 'มาแล้ว']].map(([k, l]) => h('button', { 'aria-pressed': state.filter === k, onclick: () => { state.filter = k; ui.updateList(); } }, l)));
     renderRows();
   };
@@ -546,7 +550,7 @@ function buildListPane(pane) {
     h('button', { class: 'btn ghost sm', onclick: copyList }, 'คัดลอกรายชื่อ'),
     h('button', { class: 'btn ghost sm', onclick: () => window.print() }, 'พิมพ์'),
     h('button', { class: 'btn danger sm', onclick: deleteTrip }, 'ลบรอบนี้'));
-  pane.append(stats, stats2, h('div', { class: 'listbar' }, search), seg, segT, segP, segS, emptyBox, table, tools);
+  pane.append(stats, stats2, h('div', { class: 'listbar' }, search), seg, segT, segP, emptyBox, table, tools);
 }
 
 /* ---------- ส่งออก / คัดลอก / ลบรอบ ---------- */
